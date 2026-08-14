@@ -215,6 +215,20 @@ ST_INLN int is_float(int t)
         || bt == VT_QFLOAT;
 }
 
+static inline int long_double_type(void)
+{
+#ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
+    return VT_DOUBLE | VT_LONG;
+#else
+    return VT_LDOUBLE;
+#endif
+}
+
+static inline int is_long_double_type(int t)
+{
+    return (t & (VT_BTYPE | VT_LONG)) == long_double_type();
+}
+
 static inline int is_complex(int t)
 {
     return (t & (VT_BTYPE | VT_COMPLEX)) == (VT_STRUCT | VT_COMPLEX);
@@ -3214,8 +3228,8 @@ static int combine_types(CType *dest, SValue *op1, SValue *op2, int op)
           ret = 0;
         type = *type1;
     } else if (is_float(bt1) || is_float(bt2)) {
-        if (bt1 == VT_LDOUBLE || bt2 == VT_LDOUBLE) {
-            type.t = VT_LDOUBLE;
+        if (is_long_double_type(t1) || is_long_double_type(t2)) {
+            type.t = long_double_type();
         } else if (bt1 == VT_DOUBLE || bt2 == VT_DOUBLE) {
             type.t = VT_DOUBLE;
         } else {
