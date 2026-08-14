@@ -77,6 +77,31 @@ static const struct {
     {   VT_LONG | VT_INT | VT_UNSIGNED, 8, DW_ATE_unsigned, "long unsigned int:t28=r28;0;01777777777777777777777;" },
     {   VT_VOID, 1, DW_ATE_unsigned_char, "void:t29=29" },
 #endif
+#if LONG_SIZE == 4
+    {   VT_FLOAT | VT_COMPLEX, 8, DW_ATE_complex_float,
+        "float _Complex:t28=r1;8;0;" },
+    {   VT_DOUBLE | VT_COMPLEX, 16, DW_ATE_complex_float,
+        "double _Complex:t29=r1;16;0;" },
+# ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
+    {   VT_DOUBLE | VT_LONG | VT_COMPLEX, 16, DW_ATE_complex_float,
+        "long double _Complex:t30=r1;16;0;" },
+# else
+    {   VT_LDOUBLE | VT_COMPLEX, 2 * LDOUBLE_SIZE,
+        DW_ATE_complex_float, "long double _Complex:t30=r1;32;0;" },
+# endif
+#else
+    {   VT_FLOAT | VT_COMPLEX, 8, DW_ATE_complex_float,
+        "float _Complex:t30=r1;8;0;" },
+    {   VT_DOUBLE | VT_COMPLEX, 16, DW_ATE_complex_float,
+        "double _Complex:t31=r1;16;0;" },
+# ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
+    {   VT_DOUBLE | VT_LONG | VT_COMPLEX, 16, DW_ATE_complex_float,
+        "long double _Complex:t32=r1;16;0;" },
+# else
+    {   VT_LDOUBLE | VT_COMPLEX, 2 * LDOUBLE_SIZE,
+        DW_ATE_complex_float, "long double _Complex:t32=r1;32;0;" },
+# endif
+#endif
 };
 
 #define	N_DEFAULT_DEBUG	(sizeof (default_debug) / sizeof (default_debug[0]))
@@ -1795,6 +1820,19 @@ static int remove_type_info(int type)
 	return type;
 }
 
+static int complex_debug_type(Sym *sym, int type)
+{
+    Sym *field;
+
+    if (!(type & VT_COMPLEX))
+        return type;
+    field = sym->type.ref ? sym->type.ref->next : NULL;
+    if (!field)
+        return type;
+    return VT_COMPLEX
+        | (remove_type_info(field->type.t) & (VT_BTYPE | VT_LONG));
+}
+
 static void tcc_get_debug_info(TCCState *s1, Sym *s, CString *result)
 {
     int type;
@@ -1810,6 +1848,7 @@ static void tcc_get_debug_info(TCCState *s1, Sym *s, CString *result)
         else
             break;
     }
+    type = complex_debug_type(t, type);
     if ((type & VT_BTYPE) == VT_STRUCT) {
         t = t->type.ref;
         if (stabs_struct_find(s1, t, &debug_type)) {
@@ -1927,6 +1966,7 @@ static int tcc_get_dwarf_info(TCCState *s1, Sym *s)
         else
             break;
     }
+    type = complex_debug_type(t, type);
     if ((type & VT_BTYPE) == VT_STRUCT) {
         t = t->type.ref;
 	debug_type = tcc_debug_find(s1, t, 1);

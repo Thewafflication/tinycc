@@ -199,7 +199,9 @@ exit /B %ERRORLEVEL%
 .\%1tcc -B. -c ../lib/stdatomic.c
 .\%1tcc -B. -c ../lib/atomic.S
 .\%1tcc -B. -c ../lib/builtin.c
-.\%1tcc -ar lib/%1libtcc1.a %LIBTCC1%.o crt1.o crt1w.o wincrt1.o wincrt1w.o dllcrt1.o dllmain.o winex.o chkstk.o alloca.o alloca-bt.o stdatomic.o atomic.o builtin.o
+.\%1tcc -B. -c ../lib/complex-arith.c
+.\%1tcc -B. -c ../lib/tcc-complex.c
+.\%1tcc -ar lib/%1libtcc1.a %LIBTCC1%.o crt1.o crt1w.o wincrt1.o wincrt1w.o dllcrt1.o dllmain.o winex.o chkstk.o alloca.o alloca-bt.o stdatomic.o atomic.o builtin.o complex-arith.o tcc-complex.o
 .\%1tcc -B. -c ../lib/bcheck.c -o lib/%1bcheck.o -bt -I..
 .\%1tcc -B. -c ../lib/bcheck.c -o lib/%1bcheck_run.o -bt -I.. -DBCHECK_RUN
 .\%1tcc -B. -c ../lib/bt-exe.c -o lib/%1bt-exe.o

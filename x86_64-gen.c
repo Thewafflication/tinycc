@@ -1194,11 +1194,47 @@ ST_FUNC int classify_x86_64_va_arg(CType *ty)
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int *regsize)
 {
     int size, align, reg_count;
+    if ((vt->t & VT_COMPLEX)
+        && ((vt->ref->next->type.t & VT_BTYPE) == VT_LDOUBLE)) {
+        ret->ref = NULL;
+        ret->t = VT_LDOUBLE;
+        *ret_align = 1;
+        *regsize = 16;
+        return -1;
+    }
     if (classify_x86_64_arg(vt, ret, &size, &align, &reg_count) == x86_64_mode_memory)
         return 0;
     *ret_align = 1; // Never have to re-align return values for x86-64
     *regsize = 8 * reg_count; /* the (virtual) regsize is 16 for VT_QLONG/QFLOAT */
     return 1;
+}
+
+ST_FUNC void arch_transfer_ret_regs(int aftercall)
+{
+    CType component_type;
+    SValue real, imaginary;
+    int align, component_size;
+
+    assert(vtop->type.t & VT_COMPLEX);
+    assert((vtop->r & (VT_VALMASK | VT_LVAL)) == (VT_LOCAL | VT_LVAL));
+    component_type = vtop->type.ref->next->type;
+    assert((component_type.t & VT_BTYPE) == VT_LDOUBLE);
+    component_size = type_size(&component_type, &align);
+    real = imaginary = *vtop;
+    real.type = component_type;
+    imaginary.type = component_type;
+    imaginary.c.i += component_size;
+
+    if (aftercall) {
+        store(TREG_ST0, &real);
+        o(0xd8dd); /* fstp %st(0) */
+        store(TREG_ST0, &imaginary);
+        o(0xd8dd); /* fstp %st(0) */
+    } else {
+        /* The SysV ABI returns the real part in st(0), imaginary in st(1). */
+        load(TREG_ST0, &imaginary);
+        load(TREG_ST0, &real);
+    }
 }
 
 #define REGN 6

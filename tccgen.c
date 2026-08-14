@@ -75,6 +75,7 @@ ST_DATA int func_ind; /* function start address */
 static int func_old;
 ST_DATA const char *funcname;
 ST_DATA CType int_type, func_old_type, char_type, char_pointer_type;
+static CType complex_types[3];
 static CString initstr;
 
 #if PTR_SIZE == 4
@@ -135,6 +136,9 @@ static void block(int flags);
 
 static void gen_cast(CType *type);
 static void gen_cast_s(int t);
+static void vsetc(CType *type, int r, CValue *vc);
+static void vdup(void);
+static void incr_offset(int offset);
 static inline CType *pointed_type(CType *type);
 static int is_compatible_types(CType *type1, CType *type2);
 static int parse_btype(CType *type, AttributeDef *ad, int ignore_label);
@@ -209,6 +213,182 @@ ST_INLN int is_float(int t)
         || bt == VT_DOUBLE
         || bt == VT_FLOAT
         || bt == VT_QFLOAT;
+}
+
+static inline int is_complex(int t)
+{
+    return (t & (VT_BTYPE | VT_COMPLEX)) == (VT_STRUCT | VT_COMPLEX);
+}
+
+static void init_complex_type(CType *type, int real_type)
+{
+    CType field_type, struct_type;
+    Sym *field, *imaginary, *tag;
+    int align, size;
+
+    struct_type.t = VT_STRUCT;
+    struct_type.ref = NULL;
+    field_type.t = real_type;
+    field_type.ref = NULL;
+    size = type_size(&field_type, &align);
+
+    tag = sym_push(SYM_FIRST_ANOM | SYM_STRUCT, &struct_type, 0, size * 2);
+    tag->r = align;
+    field = sym_push(SYM_FIRST_ANOM | SYM_FIELD, &field_type, 0, 0);
+    imaginary = sym_push(SYM_FIRST_ANOM | SYM_FIELD, &field_type, 0, size);
+    tag->next = field;
+    field->next = imaginary;
+
+    type->t = VT_STRUCT | VT_COMPLEX;
+    type->ref = tag;
+}
+
+static CType *complex_type_for_real(int real_type)
+{
+    int bt = real_type & (VT_BTYPE | VT_LONG);
+
+    if (bt == VT_FLOAT)
+        return &complex_types[0];
+    if (bt == VT_DOUBLE)
+        return &complex_types[1];
+#ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
+    if (bt == (VT_DOUBLE | VT_LONG))
+        return &complex_types[2];
+#else
+    if (bt == VT_LDOUBLE)
+        return &complex_types[2];
+#endif
+    return NULL;
+}
+
+static CType *complex_real_type(CType *type)
+{
+    return &type->ref->next->type;
+}
+
+static long double scalar_constant_value(SValue *value)
+{
+    int bt = value->type.t & VT_BTYPE;
+
+    if (bt == VT_FLOAT)
+        return value->c.f;
+    if (bt == VT_DOUBLE)
+        return value->c.d;
+    return value->c.ld;
+}
+
+static int is_pure_constant(SValue *value)
+{
+    return (value->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST;
+}
+
+static void make_complex_value(CType *type)
+{
+    CType real_type = *complex_real_type(type);
+    CValue value;
+    int align, part_size, size, address;
+
+    if (is_pure_constant(vtop - 1) && is_pure_constant(vtop)) {
+        memset(&value, 0, sizeof value);
+        value.complex.real = scalar_constant_value(vtop - 1);
+        value.complex.imaginary = scalar_constant_value(vtop);
+        vtop -= 2;
+        vsetc(type, VT_CONST, &value);
+        return;
+    }
+
+    size = type_size(type, &align);
+    part_size = type_size(&real_type, &align);
+    loc = (loc - size) & -align;
+    address = loc;
+
+    vset(&real_type, VT_LOCAL | VT_LVAL, address + part_size);
+    vswap();
+    vstore();
+    vpop();
+
+    vset(&real_type, VT_LOCAL | VT_LVAL, address);
+    vswap();
+    vstore();
+    vpop();
+
+    vset(type, VT_LOCAL | VT_LVAL | VT_COMPLEX_RVALUE, address);
+}
+
+static void vpush_real_constant(CType *type, long double number)
+{
+    CValue value;
+
+    memset(&value, 0, sizeof value);
+    if ((type->t & VT_BTYPE) == VT_FLOAT)
+        value.f = number;
+    else if ((type->t & VT_BTYPE) == VT_DOUBLE)
+        value.d = number;
+    else
+        value.ld = number;
+    vsetc(type, VT_CONST, &value);
+}
+
+static void complex_components(void)
+{
+    CType real_type;
+    long double real, imaginary;
+    int align, part_size;
+
+    if (!is_complex(vtop->type.t))
+        tcc_internal_error("complex value expected");
+    real_type = *complex_real_type(&vtop->type);
+    if (is_pure_constant(vtop)) {
+        real = vtop->c.complex.real;
+        imaginary = vtop->c.complex.imaginary;
+        vtop--;
+        vpush_real_constant(&real_type, real);
+        vpush_real_constant(&real_type, imaginary);
+        return;
+    }
+    if (!(vtop->r & VT_LVAL))
+        tcc_internal_error("complex value is not addressable");
+
+    part_size = type_size(&real_type, &align);
+    vdup();
+    vtop[-1].type = real_type;
+    vtop[-1].r &= ~VT_COMPLEX_RVALUE;
+    vtop->type = real_type;
+    vtop->r &= ~VT_COMPLEX_RVALUE;
+    incr_offset(part_size);
+}
+
+static int complex_real_rank(CType *type)
+{
+    int real_type;
+
+    if (is_complex(type->t))
+        type = complex_real_type(type);
+    real_type = type->t & (VT_BTYPE | VT_LONG);
+#ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
+    if (real_type == (VT_DOUBLE | VT_LONG))
+        return 3;
+#else
+    if (real_type == VT_LDOUBLE)
+        return 3;
+#endif
+    if (real_type == VT_DOUBLE)
+        return 2;
+    if (real_type == VT_FLOAT)
+        return 1;
+    return 0;
+}
+
+static CType *common_complex_type(CType *left, CType *right)
+{
+    int rank = complex_real_rank(left);
+    int right_rank = complex_real_rank(right);
+
+    if (right_rank > rank)
+        rank = right_rank;
+    if (rank < 1)
+        tcc_internal_error("complex arithmetic without a complex type");
+    return &complex_types[rank - 1];
 }
 
 static inline int is_integer_btype(int bt)
@@ -325,7 +505,7 @@ ST_FUNC int ieee_finite(double d)
 
 ST_FUNC void test_lvalue(void)
 {
-    if (!(vtop->r & VT_LVAL))
+    if (!(vtop->r & VT_LVAL) || (vtop->r & VT_COMPLEX_RVALUE))
         expect("lvalue");
 }
 
@@ -380,6 +560,14 @@ ST_FUNC void tccgen_init(TCCState *s1)
 
     /* define some often used types */
     int_type.t = VT_INT;
+
+    init_complex_type(&complex_types[0], VT_FLOAT);
+    init_complex_type(&complex_types[1], VT_DOUBLE);
+#ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
+    init_complex_type(&complex_types[2], VT_DOUBLE | VT_LONG);
+#else
+    init_complex_type(&complex_types[2], VT_LDOUBLE);
+#endif
 
     char_type.t = VT_BYTE;
     if (s1->char_is_unsigned)
@@ -1057,6 +1245,8 @@ static void gvtst_set(int inv, int t)
 {
     int *p;
 
+    if (is_complex(vtop->type.t))
+        gen_cast_s(VT_BOOL);
     if (vtop->r != VT_CMP) {
         vpushi(0);
         gen_op(TOK_NE);
@@ -1096,6 +1286,13 @@ static int gvtst(int inv, int t)
 /* generate a zero or nozero test */
 static void gen_test_zero(int op)
 {
+    if (is_complex(vtop->type.t)) {
+        CType bool_type;
+
+        bool_type.t = VT_BOOL;
+        bool_type.ref = NULL;
+        gen_cast(&bool_type);
+    }
     if (vtop->r == VT_CMP) {
         int j;
         if (op == TOK_EQ) {
@@ -2690,6 +2887,13 @@ static void type_to_str(char *buf, int buf_size,
     buf_size -= strlen(buf);
     buf += strlen(buf);
 
+    if (is_complex(t)) {
+        type_to_str(buf1, sizeof(buf1), &type->ref->next->type, NULL);
+        pstrcat(buf, buf_size, buf1);
+        pstrcat(buf, buf_size, " _Complex");
+        goto add_var;
+    }
+
     switch(bt) {
     case VT_VOID:
         tstr = "void";
@@ -2782,6 +2986,7 @@ static void type_to_str(char *buf, int buf_size,
         type_to_str(buf, buf_size, &s->type, buf1);
         goto no_var;
     }
+add_var:
     if (varstr) {
         pstrcat(buf, buf_size, " ");
         pstrcat(buf, buf_size, varstr);
@@ -3000,6 +3205,10 @@ static int combine_types(CType *dest, SValue *op1, SValue *op2, int op)
         }
         if (op == CMP_OP)
           type.t = VT_SIZE_T;
+    } else if (is_complex(t1) || is_complex(t2)) {
+        type = *common_complex_type(type1, type2);
+        if (op == CMP_OP)
+            type.t = VT_INT;
     } else if (bt1 == VT_STRUCT || bt2 == VT_STRUCT) {
         if (op != '?' || !compare_types(type1, type2, 1))
           ret = 0;
@@ -3038,6 +3247,174 @@ static int combine_types(CType *dest, SValue *op1, SValue *op2, int op)
     return ret;
 }
 
+static void prepare_complex_operands(CType *type)
+{
+    int align, size, address;
+
+    if (is_complex(vtop->type.t) && !is_pure_constant(vtop)
+        && !(vtop->r & VT_COMPLEX_RVALUE)) {
+        CType source_type = vtop->type;
+
+        size = type_size(&source_type, &align);
+        loc = (loc - size) & -align;
+        address = loc;
+        vset(&source_type, VT_LOCAL | VT_LVAL, address);
+        vswap();
+        vstore();
+        vtop->r |= VT_COMPLEX_RVALUE;
+    }
+    vswap();
+    if (is_complex(vtop->type.t) && !is_pure_constant(vtop)
+        && !(vtop->r & VT_COMPLEX_RVALUE)) {
+        CType source_type = vtop->type;
+
+        size = type_size(&source_type, &align);
+        loc = (loc - size) & -align;
+        address = loc;
+        vset(&source_type, VT_LOCAL | VT_LVAL, address);
+        vswap();
+        vstore();
+        vtop->r |= VT_COMPLEX_RVALUE;
+    }
+    vswap();
+
+    vswap();
+    gen_cast(type);
+    vswap();
+    gen_cast(type);
+
+    vswap();
+    complex_components();
+    vrotb(3);
+    complex_components();
+}
+
+static void push_scalar_operation(SValue *left, SValue *right, int op)
+{
+    vpushv(left);
+    vpushv(right);
+    gen_op(op);
+}
+
+static void finish_complex_operation(SValue *base, CType *type)
+{
+    SValue real = vtop[-1];
+    SValue imaginary = vtop[0];
+
+    vtop = base - 1;
+    vpushv(&real);
+    vpushv(&imaginary);
+    make_complex_value(type);
+}
+
+static void gen_complex_runtime_arithmetic(int op, CType *type,
+                                           SValue *base)
+{
+    SValue components[4];
+    CType runtime_real;
+    CType runtime_complex;
+    int helper;
+    int align;
+    int address;
+    int size;
+    int i;
+
+    memcpy(components, base, sizeof components);
+    runtime_real = *complex_real_type(type);
+    if ((runtime_real.t & VT_BTYPE) == VT_FLOAT)
+        runtime_real.t = VT_DOUBLE;
+    runtime_complex = *complex_type_for_real(runtime_real.t);
+
+    if (complex_real_rank(type) == 3)
+        helper = op == '*' ? TOK___tcc_mulxc3 : TOK___tcc_divxc3;
+    else
+        helper = op == '*' ? TOK___tcc_muldc3 : TOK___tcc_divdc3;
+
+    size = type_size(&runtime_complex, &align);
+    loc = (loc - size) & -align;
+    address = loc;
+
+    vtop = base - 1;
+    for (i = 0; i < 4; ++i) {
+        vpushv(&components[i]);
+        gen_cast(&runtime_real);
+    }
+    vseti(VT_LOCAL, address);
+    vpush_helper_func(helper);
+    vrott(6);
+    gfunc_call(5);
+
+    vtop = base - 1;
+    vset(&runtime_complex,
+         VT_LOCAL | VT_LVAL | VT_COMPLEX_RVALUE, address);
+    if (complex_real_rank(&runtime_complex) != complex_real_rank(type))
+        gen_cast(type);
+}
+
+static void gen_complex_arithmetic(int op, CType *type)
+{
+    SValue *base;
+
+    prepare_complex_operands(type);
+    base = vtop - 3;
+
+    if ((op == '*' || op == '/')
+        && (!is_pure_constant(&base[0])
+            || !is_pure_constant(&base[1])
+            || !is_pure_constant(&base[2])
+            || !is_pure_constant(&base[3]))) {
+        gen_complex_runtime_arithmetic(op, type, base);
+        return;
+    }
+
+    if (op == '+' || op == '-') {
+        push_scalar_operation(&base[0], &base[2], op);
+        push_scalar_operation(&base[1], &base[3], op);
+    } else if (op == '*') {
+        push_scalar_operation(&base[0], &base[2], '*');
+        push_scalar_operation(&base[1], &base[3], '*');
+        gen_op('-');
+
+        push_scalar_operation(&base[0], &base[3], '*');
+        push_scalar_operation(&base[1], &base[2], '*');
+        gen_op('+');
+    } else if (op == '/') {
+        push_scalar_operation(&base[2], &base[2], '*');
+        push_scalar_operation(&base[3], &base[3], '*');
+        gen_op('+');
+
+        push_scalar_operation(&base[0], &base[2], '*');
+        push_scalar_operation(&base[1], &base[3], '*');
+        gen_op('+');
+        vpushv(&base[4]);
+        gen_op('/');
+
+        push_scalar_operation(&base[1], &base[2], '*');
+        push_scalar_operation(&base[0], &base[3], '*');
+        gen_op('-');
+        vpushv(&base[4]);
+        gen_op('/');
+    } else {
+        tcc_internal_error("invalid complex arithmetic operator");
+    }
+    finish_complex_operation(base, type);
+}
+
+static void gen_complex_equality(int op, CType *type)
+{
+    prepare_complex_operands(type);
+    vrotb(3);
+    vswap();
+    gen_op(TOK_EQ);
+    vrott(3);
+    gen_op(TOK_EQ);
+    gen_op('&');
+    if (op == TOK_NE)
+        gen_test_zero(TOK_EQ);
+    vtop->type.t = VT_INT;
+    vtop->type.ref = NULL;
+}
+
 /* generic gen_op: handles types problems */
 ST_FUNC void gen_op(int op)
 {
@@ -3071,6 +3448,16 @@ redo:
     } else if (!combine_types(&combtype, vtop - 1, vtop, op_class)) {
 op_err:
         tcc_error("invalid operand types for binary operation");
+    } else if (is_complex(t1) || is_complex(t2)) {
+        CType *complex_type = common_complex_type(&vtop[-1].type,
+                                                  &vtop->type);
+
+        if (op == TOK_EQ || op == TOK_NE)
+            gen_complex_equality(op, complex_type);
+        else if (op == '+' || op == '-' || op == '*' || op == '/')
+            gen_complex_arithmetic(op, complex_type);
+        else
+            goto op_err;
     } else if (bt1 == VT_PTR || bt2 == VT_PTR) {
         /* at least one operand is a pointer */
         /* relational op: must be both pointers */
@@ -3267,6 +3654,71 @@ static void gen_cast(CType *type)
 
     if (IS_ENUM(type->t) && type->ref->c < 0)
         tcc_error("cast to incomplete type");
+
+    if (is_complex(type->t) || is_complex(vtop->type.t)) {
+        int destination_type = type->t & VT_BTYPE;
+        int source_type = vtop->type.t & VT_BTYPE;
+
+        if (is_complex(type->t)) {
+            CType result_type = *type;
+            CType real_type = *complex_real_type(type);
+
+            result_type.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_STORAGE);
+            if (is_complex(vtop->type.t)) {
+                if (type->ref == vtop->type.ref) {
+                    vtop->type = result_type;
+                    return;
+                }
+                complex_components();
+                {
+                    SValue components[2];
+
+                    components[0] = vtop[-1];
+                    components[1] = vtop[0];
+                    vtop -= 2;
+                    vpushv(&components[0]);
+                    gen_cast(&real_type);
+                    if (!is_pure_constant(vtop))
+                        save_reg(vtop->r);
+                    vpushv(&components[1]);
+                }
+                gen_cast(&real_type);
+            } else {
+                if (!is_float(source_type)
+                    && !is_integer_btype(source_type))
+                    cast_error(&vtop->type, type);
+                gen_cast(&real_type);
+                vpush_real_constant(&real_type, 0.0L);
+            }
+            make_complex_value(&result_type);
+            return;
+        }
+
+        if (destination_type == VT_VOID) {
+            vpop();
+            vpushi(0);
+            vtop->type = *type;
+            return;
+        }
+        if (!is_float(destination_type)
+            && !is_integer_btype(destination_type))
+            cast_error(&vtop->type, type);
+
+        if (destination_type == VT_BOOL) {
+            CType source_type = vtop->type;
+            CType real_type = *complex_real_type(&source_type);
+
+            vpush_real_constant(&real_type, 0.0L);
+            gen_cast(&source_type);
+            gen_complex_equality(TOK_NE, &source_type);
+            vtop->type = *type;
+        } else {
+            complex_components();
+            vpop();
+            gen_cast(type);
+        }
+        return;
+    }
 
     dbt = type->t & (VT_BTYPE | VT_UNSIGNED);
     sbt = vtop->type.t & (VT_BTYPE | VT_UNSIGNED);
@@ -3605,6 +4057,14 @@ static void verify_assign_cast(CType *dt)
     sbt = st->t & VT_BTYPE;
     if (dt->t & VT_CONSTANT)
         tcc_warning("assignment of read-only location");
+    if (is_complex(dt->t) || is_complex(st->t)) {
+        if ((is_complex(dt->t) || is_float(dbt)
+             || is_integer_btype(dbt))
+            && (is_complex(st->t) || is_float(sbt)
+                || is_integer_btype(sbt)))
+            return;
+        goto error;
+    }
     switch(dbt) {
     case VT_VOID:
         if (sbt != dbt)
@@ -3695,6 +4155,26 @@ ST_FUNC void vstore(void)
     sbt = vtop->type.t & VT_BTYPE;
     dbt = ft & VT_BTYPE;
     verify_assign_cast(&vtop[-1].type);
+
+    if (is_complex(ft) || is_complex(vtop->type.t)) {
+        gen_cast(&vtop[-1].type);
+        sbt = vtop->type.t & VT_BTYPE;
+        dbt = vtop[-1].type.t & VT_BTYPE;
+    }
+
+    if (is_complex(vtop->type.t) && is_pure_constant(vtop)) {
+        init_params p = { rodata_section };
+        unsigned long offset;
+
+        size = type_size(&vtop->type, &align);
+        if (NODATA_WANTED)
+            size = 0, align = 1;
+        offset = section_add(p.sec, size, align);
+        vpush_ref(&vtop->type, p.sec, offset, size);
+        vswap();
+        init_putv(&p, &vtop->type, offset);
+        vtop->r |= VT_LVAL;
+    }
 
     if (sbt == VT_STRUCT) {
         /* if structure, only generate pointer */
@@ -3863,6 +4343,8 @@ ST_FUNC void vstore(void)
 ST_FUNC void inc(int post, int c)
 {
     test_lvalue();
+    if (is_complex(vtop->type.t))
+        tcc_error("invalid operand types for increment or decrement");
     vdup(); /* save lvalue */
     if (post) {
         gv_dup(); /* duplicate value */
@@ -4722,13 +5204,14 @@ static void parse_btype_qualify(CType *type, int qualifiers)
  */
 static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
 {
-    int t, u, bt, st, type_found, typespec_found, g, n;
+    int t, u, bt, st, type_found, typespec_found, complex_found, g, n;
     Sym *s;
     CType type1;
 
     memset(ad, 0, sizeof(AttributeDef));
     type_found = 0;
     typespec_found = 0;
+    complex_found = 0;
     t = VT_INT;
     bt = st = -1;
     type->ref = NULL;
@@ -4806,7 +5289,12 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
             u = VT_BOOL;
             goto basic_type;
         case TOK_COMPLEX:
-            tcc_error("_Complex is not yet supported");
+            if (complex_found)
+                goto tmbt;
+            complex_found = 1;
+            typespec_found = 1;
+            next();
+            break;
         case TOK_FLOAT:
             u = VT_FLOAT;
             goto basic_type;
@@ -4983,10 +5471,27 @@ the_end:
     bt = t & (VT_BTYPE|VT_LONG);
     if (bt == VT_LONG)
         t |= LONG_SIZE == 8 ? VT_LLONG : VT_INT;
+    if (complex_found) {
+        bt = t & (VT_BTYPE | VT_LONG);
+        if (t & (VT_DEFSIGN | VT_UNSIGNED))
+            goto tmbt;
+        if (bt == VT_FLOAT) {
+            u = 0;
+        } else if (bt == VT_DOUBLE) {
+            u = 1;
+        } else if (bt == VT_LDOUBLE) {
+            u = 2;
+        } else {
+            goto tmbt;
+        }
+        t = (t & ~(VT_BTYPE | VT_LONG)) | complex_types[u].t;
+        type->ref = complex_types[u].ref;
+    } else {
 #ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
-    if (bt == VT_LDOUBLE)
-        t = (t & ~(VT_BTYPE|VT_LONG)) | (VT_DOUBLE|VT_LONG);
+        if (bt == VT_LDOUBLE)
+            t = (t & ~(VT_BTYPE|VT_LONG)) | (VT_DOUBLE|VT_LONG);
 #endif
+    }
     type->t = t;
     return type_found;
 }
@@ -5596,6 +6101,7 @@ ST_FUNC void unary(void)
 {
     int n, t, align, size, r;
     CType type;
+    CValue value;
     Sym *s;
     AttributeDef ad;
 
@@ -5633,6 +6139,24 @@ ST_FUNC void unary(void)
     case TOK_CULLONG:
         t = VT_LLONG | VT_UNSIGNED;
 	goto push_tokc;
+    case TOK_CFLOAT_I:
+        type = complex_types[0];
+        memset(&value, 0, sizeof value);
+        value.complex.imaginary = tokc.f;
+        goto push_imaginary;
+    case TOK_CDOUBLE_I:
+        type = complex_types[1];
+        memset(&value, 0, sizeof value);
+        value.complex.imaginary = tokc.d;
+        goto push_imaginary;
+    case TOK_CLDOUBLE_I:
+        type = complex_types[2];
+        memset(&value, 0, sizeof value);
+        value.complex.imaginary = tokc.ld;
+    push_imaginary:
+        vsetc(&type, VT_CONST, &value);
+        next();
+        break;
     case TOK_CFLOAT:
         t = VT_FLOAT;
 	goto push_tokc;
@@ -5820,6 +6344,25 @@ ST_FUNC void unary(void)
 	n = is_compatible_types(&vtop[-1].type, &vtop[0].type);
 	vtop -= 2;
 	vpushi(n);
+        break;
+    case TOK_builtin_complex:
+        {
+            CType *complex_type;
+
+            next();
+            skip('(');
+            expr_eq();
+            skip(',');
+            expr_eq();
+            skip(')');
+            complex_type = complex_type_for_real(vtop[-1].type.t);
+            if (!complex_type
+                || !is_compatible_unqualified_types(&vtop[-1].type,
+                                                     &vtop->type))
+                tcc_error("__builtin_complex arguments must have the same "
+                          "real floating type");
+            make_complex_value(complex_type);
+        }
         break;
     case TOK_builtin_choose_expr:
 	{
@@ -6319,7 +6862,8 @@ special_math_val:
 
             if (ret_nregs < 0) {
                 vsetc(&ret.type, ret.r, &ret.c);
-#ifdef TCC_TARGET_RISCV64
+#if defined(TCC_TARGET_RISCV64) || \
+    (defined(TCC_TARGET_X86_64) && !defined(TCC_TARGET_PE))
                 arch_transfer_ret_regs(1);
 #endif
             } else {
@@ -6818,7 +7362,21 @@ static void gfunc_return(CType *func_type)
         ret_nregs = gfunc_sret(func_type, func_var, &ret_type,
                                &ret_align, &regsize);
         if (ret_nregs < 0) {
-#ifdef TCC_TARGET_RISCV64
+#if defined(TCC_TARGET_RISCV64) || \
+    (defined(TCC_TARGET_X86_64) && !defined(TCC_TARGET_PE))
+            if (is_complex(func_type->t) && !(vtop->r & VT_LVAL)) {
+                int align, size, addr;
+
+                size = type_size(func_type, &align);
+                loc = (loc - size) & -align;
+                addr = loc;
+                type = *func_type;
+                vset(&type, VT_LOCAL | VT_LVAL, addr);
+                vswap();
+                vstore();
+                vpop();
+                vset(&type, VT_LOCAL | VT_LVAL, addr);
+            }
             arch_transfer_ret_regs(0);
 #endif
         } else if (0 == ret_nregs) {
@@ -6835,7 +7393,8 @@ static void gfunc_return(CType *func_type)
             /* returning structure packed into registers */
             int size, addr, align, rc, n;
             size = type_size(func_type,&align);
-            if (ret_nregs * regsize > size ||
+            if ((is_complex(func_type->t) && is_pure_constant(vtop)) ||
+                ret_nregs * regsize > size ||
 		((align & (ret_align - 1))
                  && ((vtop->r & VT_VALMASK) < VT_CONST /* pointer to struct */
                      || (vtop->c.i & (ret_align - 1))
@@ -7857,6 +8416,35 @@ static void write_ldouble(unsigned char *d, void *s)
     }
 }
 
+static void write_complex_part(unsigned char *destination, CType *type,
+                               long double value)
+{
+    union {
+        float f;
+        uint32_t u;
+    } float_value;
+    union {
+        double d;
+        uint64_t u;
+    } double_value;
+
+    switch (type->t & VT_BTYPE) {
+    case VT_FLOAT:
+        float_value.f = value;
+        write32le(destination, float_value.u);
+        break;
+    case VT_DOUBLE:
+        double_value.d = value;
+        write64le(destination, double_value.u);
+        break;
+    case VT_LDOUBLE:
+        write_ldouble(destination, &value);
+        break;
+    default:
+        tcc_internal_error("invalid complex component type");
+    }
+}
+
 /* store a value or an expression directly in global data or in local array */
 static void init_putv(init_params *p, CType *type, unsigned long c)
 {
@@ -7896,6 +8484,17 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
 
         ptr = sec->data + c;
         val = vtop->c.i;
+
+        if (is_complex(type->t) && is_pure_constant(vtop)) {
+            CType *real_type = complex_real_type(type);
+            int part_size = type_size(real_type, &align);
+
+            write_complex_part(ptr, real_type, vtop->c.complex.real);
+            write_complex_part((unsigned char *)ptr + part_size, real_type,
+                               vtop->c.complex.imaginary);
+            vtop--;
+            return;
+        }
 
 	if ((vtop->r & (VT_SYM|VT_CONST)) == (VT_SYM|VT_CONST)
             && vtop->sym->v >= SYM_FIRST_ANOM
@@ -8181,7 +8780,8 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
             && is_compatible_unqualified_types(type, &vtop->type)) {
         goto one_elem;
 
-    } else if ((type->t & VT_BTYPE) == VT_STRUCT) {
+    } else if ((type->t & VT_BTYPE) == VT_STRUCT
+               && !is_complex(type->t)) {
         no_oblock = 1;
         if ((flags & DIF_FIRST) || tok == '{') {
             skip('{');

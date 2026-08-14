@@ -437,6 +437,7 @@ __CRT_INLINE long double __cdecl fabsl(long double x) {
   __CRT_INLINE float expf(float x) { return exp(x); }
   __CRT_INLINE float floorf(float x) { return floor(x); }
   __CRT_INLINE float fmodf(float x, float y) { return fmod(x, y); }
+  __CRT_INLINE float hypotf(float x, float y) { return hypot(x, y); }
   __CRT_INLINE float logf(float x) { return log(x); }
   __CRT_INLINE float logbf(float x) { return logb(x); }
   __CRT_INLINE float log10f(float x) { return log10(x); }
@@ -447,6 +448,7 @@ __CRT_INLINE long double __cdecl fabsl(long double x) {
   __CRT_INLINE float sqrtf(float x) { return sqrt(x); }
   __CRT_INLINE float tanf(float x) { return tan(x); }
   __CRT_INLINE float tanhf(float x) { return tanh(x); }
+  __CRT_INLINE float copysignf(float x, float y) { return copysign(x, y); }
 #endif
 __CRT_INLINE float __cdecl asinhf(float x) { return asinh(x); }
 __CRT_INLINE float __cdecl acoshf(float x) { return acosh(x); }
@@ -458,6 +460,9 @@ __CRT_INLINE long double __cdecl atanhl(long double x) { return atanh(x); }
 __CRT_INLINE long double __cdecl asinl(long double x) { return asin(x); }
 __CRT_INLINE long double __cdecl acosl(long double x) { return acos(x); }
 __CRT_INLINE long double __cdecl atanl(long double x) { return atan(x); }
+__CRT_INLINE long double __cdecl atan2l(long double x, long double y) {
+  return atan2(x, y);
+}
 __CRT_INLINE long double __cdecl ceill(long double x) { return ceil(x); }
 __CRT_INLINE long double __cdecl coshl(long double x) { return cosh(x); }
 __CRT_INLINE long double __cdecl cosl(long double x) { return cos(x); }
@@ -475,6 +480,9 @@ __CRT_INLINE long double __cdecl sinl(long double x) { return sin(x); }
 __CRT_INLINE long double __cdecl sqrtl(long double x) { return sqrt(x); }
 __CRT_INLINE long double __cdecl tanhl(long double x) { return tanh(x); }
 __CRT_INLINE long double __cdecl tanl(long double x) { return tan(x); }
+__CRT_INLINE long double __cdecl copysignl(long double x, long double y) {
+  return copysign(x, y);
+}
 
 /* Following are accurate, but much shorter implementations than MUSL lib. */
 

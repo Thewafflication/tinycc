@@ -574,10 +574,16 @@ ST_FUNC const char *get_tok_str(int v, CValue *cv)
 
     case TOK_CFLOAT:
         return strcpy(p, "<float>");
+    case TOK_CFLOAT_I:
+        return strcpy(p, "<imaginary float>");
     case TOK_CDOUBLE:
         return strcpy(p, "<double>");
+    case TOK_CDOUBLE_I:
+        return strcpy(p, "<imaginary double>");
     case TOK_CLDOUBLE:
         return strcpy(p, "<long double>");
+    case TOK_CLDOUBLE_I:
+        return strcpy(p, "<imaginary long double>");
     case TOK_LINENUM:
         return strcpy(p, "<linenumber>");
 
@@ -972,6 +978,7 @@ static inline int tok_size(const int *p)
     case TOK_CCHAR:
     case TOK_LCHAR:
     case TOK_CFLOAT:
+    case TOK_CFLOAT_I:
     case TOK_LINENUM:
         return 1 + 1;
     case TOK_STR:
@@ -983,10 +990,12 @@ static inline int tok_size(const int *p)
     case TOK_CULONG:
 	return 1 + LONG_SIZE / 4;
     case TOK_CDOUBLE:
+    case TOK_CDOUBLE_I:
     case TOK_CLLONG:
     case TOK_CULLONG:
         return 1 + 2;
     case TOK_CLDOUBLE:
+    case TOK_CLDOUBLE_I:
         return 1 + LDOUBLE_WORDS;
     default:
         return 1 + 0;
@@ -1093,6 +1102,7 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
     case TOK_CCHAR:
     case TOK_LCHAR:
     case TOK_CFLOAT:
+    case TOK_CFLOAT_I:
     case TOK_LINENUM:
 #if LONG_SIZE == 4
     case TOK_CLONG:
@@ -1116,6 +1126,7 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
         }
         break;
     case TOK_CDOUBLE:
+    case TOK_CDOUBLE_I:
     case TOK_CLLONG:
     case TOK_CULLONG:
 #if LONG_SIZE == 8
@@ -1126,6 +1137,7 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
         str[len++] = cv->tab[1];
         break;
     case TOK_CLDOUBLE:
+    case TOK_CLDOUBLE_I:
         str[len++] = cv->tab[0];
         str[len++] = cv->tab[1];
         if (LDOUBLE_WORDS >= 3)
@@ -1185,6 +1197,7 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
         cv->i = (unsigned)*p++;
         break;
     case TOK_CFLOAT:
+    case TOK_CFLOAT_I:
 	tab[0] = *p++;
 	break;
     case TOK_STR:
@@ -1196,6 +1209,7 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
         p += (cv->str.size + sizeof(int) - 1) / sizeof(int);
         break;
     case TOK_CDOUBLE:
+    case TOK_CDOUBLE_I:
     case TOK_CLLONG:
     case TOK_CULLONG:
 #if LONG_SIZE == 8
@@ -1205,6 +1219,7 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
         n = 2;
         goto copy;
     case TOK_CLDOUBLE:
+    case TOK_CLDOUBLE_I:
         n = LDOUBLE_WORDS;
     copy:
         do
@@ -1446,7 +1461,8 @@ static int expr_preprocess(TCCState *s1)
         if (tok < TOK_IDENT) {
             if (tok == TOK_LINEFEED || tok == TOK_EOF)
                 break;
-            if (tok >= TOK_STR && tok <= TOK_CLDOUBLE)
+            if ((tok >= TOK_STR && tok <= TOK_CLDOUBLE)
+                || (tok >= TOK_CFLOAT_I && tok <= TOK_CLDOUBLE_I))
                 tcc_error("invalid constant in preprocessor expression");
 
         } else if (tok == TOK_DEFINED) {
@@ -2429,6 +2445,11 @@ static void parse_number(const char *p)
                 tok = TOK_CDOUBLE;
                 tokc.d = strtod(token_buf, NULL);
             }
+        }
+        t = toup(ch);
+        if (t == 'I' || t == 'J') {
+            ch = *p++;
+            tok += TOK_CFLOAT_I - TOK_CFLOAT;
         }
     } else {
         unsigned long long n, n1;
