@@ -26,8 +26,22 @@
 #define DBL_MAX 1.7976931348623157e+308
 #define DBL_MAX_10_EXP 308
 
+/* Windows TinyCC uses the ABI's double-width long double. */
+#if defined _WIN32
+
+#define LDBL_MANT_DIG 53
+#define LDBL_DIG 15
+#define LDBL_EPSILON 2.2204460492503131e-16L
+#define LDBL_MIN_EXP (-1021)
+#define LDBL_MIN 2.2250738585072014e-308L
+#define LDBL_MIN_10_EXP (-307)
+#define LDBL_MAX_EXP 1024
+#define LDBL_MAX 1.7976931348623157e+308L
+#define LDBL_MAX_10_EXP 308
+#define DECIMAL_DIG 17
+
 /* horrible intel long double */
-#if defined __i386__ || defined __x86_64__
+#elif defined __i386__ || defined __x86_64__
 
 #define LDBL_MANT_DIG 64
 #define LDBL_DIG 18

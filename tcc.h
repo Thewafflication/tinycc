@@ -472,6 +472,10 @@ typedef union CValue {
     float f;
     uint64_t i;
     struct {
+        long double real;
+        long double imaginary;
+    } complex;
+    struct {
         char *data;
         int size;
     } str;
@@ -1036,6 +1040,7 @@ struct filespec {
                                 char/short stored in integer registers) */
 #define VT_NONCONST  0x1000  /* VT_CONST, but not an (C standard) integer
                                 constant expression */
+#define VT_COMPLEX_RVALUE 0x2000 /* addressable internal complex temporary */
 #define VT_MUSTBOUND 0x4000  /* bound checking must be done before
                                 dereferencing value */
 #define VT_BOUNDED   0x8000  /* value is bounded. The address of the
@@ -1072,7 +1077,8 @@ struct filespec {
 #define VT_TYPEDEF 0x00004000  /* typedef definition */
 #define VT_INLINE  0x00008000  /* inline definition */
 #define VT_TLS     0x00010000  /* thread-local storage */
-/* currently unused: 0x000[248]0000  */
+#define VT_COMPLEX 0x00020000  /* complex scalar represented by a struct */
+/* currently unused: 0x000[48]0000  */
 
 #define VT_STRUCT_SHIFT 20     /* shift for bitfield shift values (32 - 2*6) */
 #define VT_STRUCT_MASK (((1U << (6+6)) - 1) << VT_STRUCT_SHIFT | VT_BITFIELD)
@@ -1185,8 +1191,12 @@ struct filespec {
 #define TOK_PPNUM   0xcd /* preprocessor number */
 #define TOK_PPSTR   0xce /* preprocessor string */
 #define TOK_LINENUM 0xcf /* line number info */
+#define TOK_CFLOAT_I 0xd0 /* imaginary float constant */
+#define TOK_CDOUBLE_I 0xd1 /* imaginary double constant */
+#define TOK_CLDOUBLE_I 0xd2 /* imaginary long double constant */
 
-#define TOK_HAS_VALUE(t) (t >= TOK_CCHAR && t <= TOK_LINENUM)
+#define TOK_HAS_VALUE(t) ((t >= TOK_CCHAR && t <= TOK_LINENUM) \
+                         || (t >= TOK_CFLOAT_I && t <= TOK_CLDOUBLE_I))
 
 #define TOK_EOF       (-1)  /* end of file */
 #define TOK_LINEFEED  10    /* line feed */
@@ -1692,6 +1702,8 @@ ST_FUNC void gen_increment_tcov (SValue *sv);
 ST_FUNC void gen_opl(int op);
 #ifdef TCC_TARGET_PE
 ST_FUNC void gen_vla_result(int addr);
+#else
+ST_FUNC void arch_transfer_ret_regs(int aftercall);
 #endif
 ST_FUNC void gen_cvt_sxtw(void);
 ST_FUNC void gen_cvt_csti(int t);

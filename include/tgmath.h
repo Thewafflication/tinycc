@@ -6,8 +6,14 @@
 #define _TGMATH_H
 
 #include <math.h>
+#include <complex.h>
 
 #ifndef __cplusplus
+#define __tgmath_shared(x, F) \
+  _Generic ((x), \
+    float: F##f, long double: F##l, \
+    float complex: c##F##f, double complex: c##F, \
+    long double complex: c##F##l, default: F)(x)
 #define __tgmath_real(x, F) \
   _Generic ((x), float: F##f, long double: F##l, default: F)(x)
 #define __tgmath_real_2_1(x, y, F) \
@@ -18,25 +24,44 @@
   _Generic ((x)+(y), float: F##f, long double: F##l, default: F)(x, y, z)
 #define __tgmath_real_3(x, y, z, F) \
   _Generic ((x)+(y)+(z), float: F##f, long double: F##l, default: F)(x, y, z)
+#define __tgmath_pow(x, y) \
+  _Generic ((x)+(y), \
+    float: powf((x), (y)), long double: powl((x), (y)), \
+    float complex: cpowf(((float complex[]){(x)})[0], \
+                         ((float complex[]){(y)})[0]), \
+    double complex: cpow(((double complex[]){(x)})[0], \
+                         ((double complex[]){(y)})[0]), \
+    long double complex: \
+      cpowl(((long double complex[]){(x)})[0], \
+            ((long double complex[]){(y)})[0]), \
+    default: pow((x), (y)))
+#define __tgmath_abs(x) \
+  _Generic ((x), \
+    float: fabsf, long double: fabsl, \
+    float complex: cabsf, double complex: cabs, \
+    long double complex: cabsl, default: fabs)(x)
+#define __tgmath_cplx_only(x, F) \
+  _Generic ((x), \
+    float complex: F##f, long double complex: F##l, default: F)(x)
 
 /* Functions defined in both <math.h> and <complex.h> (7.22p4) */
-#define acos(z)          __tgmath_real(z, acos)
-#define asin(z)          __tgmath_real(z, asin)
-#define atan(z)          __tgmath_real(z, atan)
-#define acosh(z)         __tgmath_real(z, acosh)
-#define asinh(z)         __tgmath_real(z, asinh)
-#define atanh(z)         __tgmath_real(z, atanh)
-#define cos(z)           __tgmath_real(z, cos)
-#define sin(z)           __tgmath_real(z, sin)
-#define tan(z)           __tgmath_real(z, tan)
-#define cosh(z)          __tgmath_real(z, cosh)
-#define sinh(z)          __tgmath_real(z, sinh)
-#define tanh(z)          __tgmath_real(z, tanh)
-#define exp(z)           __tgmath_real(z, exp)
-#define log(z)           __tgmath_real(z, log)
-#define pow(z1,z2)       __tgmath_real_2(z1, z2, pow)
-#define sqrt(z)          __tgmath_real(z, sqrt)
-#define fabs(z)          __tgmath_real(z, fabs)
+#define acos(z)          __tgmath_shared(z, acos)
+#define asin(z)          __tgmath_shared(z, asin)
+#define atan(z)          __tgmath_shared(z, atan)
+#define acosh(z)         __tgmath_shared(z, acosh)
+#define asinh(z)         __tgmath_shared(z, asinh)
+#define atanh(z)         __tgmath_shared(z, atanh)
+#define cos(z)           __tgmath_shared(z, cos)
+#define sin(z)           __tgmath_shared(z, sin)
+#define tan(z)           __tgmath_shared(z, tan)
+#define cosh(z)          __tgmath_shared(z, cosh)
+#define sinh(z)          __tgmath_shared(z, sinh)
+#define tanh(z)          __tgmath_shared(z, tanh)
+#define exp(z)           __tgmath_shared(z, exp)
+#define log(z)           __tgmath_shared(z, log)
+#define pow(z1,z2)       __tgmath_pow(z1, z2)
+#define sqrt(z)          __tgmath_shared(z, sqrt)
+#define fabs(z)          __tgmath_abs(z)
 
 /* Functions defined in <math.h> only (7.22p5) */
 #define atan2(x,y)       __tgmath_real_2(x, y, atan2)
@@ -78,12 +103,11 @@
 #define tgamma(x)        __tgmath_real(x, tgamma)
 #define trunc(x)         __tgmath_real(x, trunc)
 
-/* Functions defined in <complex.h> only (7.22p6)
+/* Functions defined in <complex.h> only (7.22p6) */
 #define carg(z)          __tgmath_cplx_only(z, carg)
 #define cimag(z)         __tgmath_cplx_only(z, cimag)
 #define conj(z)          __tgmath_cplx_only(z, conj)
 #define cproj(z)         __tgmath_cplx_only(z, cproj)
 #define creal(z)         __tgmath_cplx_only(z, creal)
-*/
 #endif /* __cplusplus */
 #endif /* _TGMATH_H */

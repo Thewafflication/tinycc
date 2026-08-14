@@ -166,6 +166,7 @@
      DEF(TOK_VISIBILITY2, "__visibility__")
 
      DEF(TOK_builtin_types_compatible_p, "__builtin_types_compatible_p")
+     DEF(TOK_builtin_complex, "__builtin_complex")
      DEF(TOK_builtin_choose_expr, "__builtin_choose_expr")
      DEF(TOK_builtin_constant_p, "__builtin_constant_p")
      DEF(TOK_builtin_frame_address, "__builtin_frame_address")
@@ -220,6 +221,10 @@
      DEF(TOK_option, "option")
 
 /* builtin functions or variables */
+     DEF(TOK___tcc_muldc3, "__tcc_muldc3")
+     DEF(TOK___tcc_divdc3, "__tcc_divdc3")
+     DEF(TOK___tcc_mulxc3, "__tcc_mulxc3")
+     DEF(TOK___tcc_divxc3, "__tcc_divxc3")
 #ifndef TCC_ARM_EABI
      DEF(TOK_memcpy, "memcpy")
      DEF(TOK_memmove, "memmove")
