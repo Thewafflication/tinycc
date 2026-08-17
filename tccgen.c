@@ -76,6 +76,7 @@ static int func_old;
 ST_DATA const char *funcname;
 ST_DATA CType int_type, func_old_type, char_type, char_pointer_type;
 static CType complex_types[3];
+static CType complex_helper_types[2];
 static CString initstr;
 
 #if PTR_SIZE == 4
@@ -255,6 +256,32 @@ static void init_complex_type(CType *type, int real_type)
 
     type->t = VT_STRUCT | VT_COMPLEX;
     type->ref = tag;
+}
+
+static void init_complex_helper_type(CType *type, CType *real_type)
+{
+    CType output_type = *real_type;
+    CType return_type;
+    Sym *function;
+    Sym **next;
+    int i;
+
+    return_type.t = VT_VOID;
+    return_type.ref = NULL;
+    mk_pointer(&output_type);
+
+    function = sym_push(SYM_FIELD, &return_type, 0, 0);
+    function->f.func_call = FUNC_CDECL;
+    function->f.func_type = FUNC_NEW;
+    next = &function->next;
+    for (i = 0; i < 4; ++i) {
+        *next = sym_push(SYM_FIELD, real_type, 0, 0);
+        next = &(*next)->next;
+    }
+    *next = sym_push(SYM_FIELD, &output_type, 0, 0);
+
+    type->t = VT_FUNC;
+    type->ref = function;
 }
 
 static CType *complex_type_for_real(int real_type)
@@ -582,6 +609,10 @@ ST_FUNC void tccgen_init(TCCState *s1)
 #else
     init_complex_type(&complex_types[2], VT_LDOUBLE);
 #endif
+    init_complex_helper_type(&complex_helper_types[0],
+                             complex_real_type(&complex_types[1]));
+    init_complex_helper_type(&complex_helper_types[1],
+                             complex_real_type(&complex_types[2]));
 
     char_type.t = VT_BYTE;
     if (s1->char_is_unsigned)
@@ -3327,6 +3358,7 @@ static void gen_complex_runtime_arithmetic(int op, CType *type,
     SValue components[4];
     CType runtime_real;
     CType runtime_complex;
+    CType *runtime_helper_type;
     int helper;
     int align;
     int address;
@@ -3339,10 +3371,13 @@ static void gen_complex_runtime_arithmetic(int op, CType *type,
         runtime_real.t = VT_DOUBLE;
     runtime_complex = *complex_type_for_real(runtime_real.t);
 
-    if (complex_real_rank(type) == 3)
+    if (complex_real_rank(type) == 3) {
         helper = op == '*' ? TOK___tcc_mulxc3 : TOK___tcc_divxc3;
-    else
+        runtime_helper_type = &complex_helper_types[1];
+    } else {
         helper = op == '*' ? TOK___tcc_muldc3 : TOK___tcc_divdc3;
+        runtime_helper_type = &complex_helper_types[0];
+    }
 
     size = type_size(&runtime_complex, &align);
     loc = (loc - size) & -align;
@@ -3354,7 +3389,7 @@ static void gen_complex_runtime_arithmetic(int op, CType *type,
         gen_cast(&runtime_real);
     }
     vseti(VT_LOCAL, address);
-    vpush_helper_func(helper);
+    vpushsym(runtime_helper_type, external_helper_sym(helper));
     vrott(6);
     gfunc_call(5);
 
