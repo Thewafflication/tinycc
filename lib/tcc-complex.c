@@ -10,134 +10,53 @@
 #define LCMPLX(x, y) \
     __builtin_complex((long double)(x), (long double)(y))
 
-typedef union {
-    double complex value;
-    double part[2];
-} double_complex_parts;
-
-typedef union {
-    float complex value;
-    float part[2];
-} float_complex_parts;
-
-typedef union {
-    long double complex value;
-    long double part[2];
-} long_double_complex_parts;
-
-double (creal)(double complex z)
-{
-    double_complex_parts value;
-    value.value = z;
-    return value.part[0];
+#define DEFINE_BASIC_FUNCTIONS(type, suffix, cmplx)                     \
+typedef union {                                                        \
+    type complex value;                                                \
+    type part[2];                                                      \
+} complex_parts##suffix;                                               \
+                                                                       \
+type (creal##suffix)(type complex z)                                   \
+{                                                                      \
+    complex_parts##suffix value;                                       \
+    value.value = z;                                                   \
+    return value.part[0];                                              \
+}                                                                      \
+                                                                       \
+type (cimag##suffix)(type complex z)                                   \
+{                                                                      \
+    complex_parts##suffix value;                                       \
+    value.value = z;                                                   \
+    return value.part[1];                                              \
+}                                                                      \
+                                                                       \
+type cabs##suffix(type complex z)                                      \
+{                                                                      \
+    return hypot##suffix(creal##suffix(z), cimag##suffix(z));           \
+}                                                                      \
+                                                                       \
+type carg##suffix(type complex z)                                      \
+{                                                                      \
+    return atan2##suffix(cimag##suffix(z), creal##suffix(z));            \
+}                                                                      \
+                                                                       \
+type complex conj##suffix(type complex z)                              \
+{                                                                      \
+    return cmplx(creal##suffix(z), -cimag##suffix(z));                   \
+}                                                                      \
+                                                                       \
+type complex cproj##suffix(type complex z)                             \
+{                                                                      \
+    type x = creal##suffix(z);                                         \
+    type y = cimag##suffix(z);                                         \
+    if (isinf(x) || isinf(y))                                          \
+        return cmplx(INFINITY, copysign##suffix((type)0, y));           \
+    return z;                                                         \
 }
 
-float (crealf)(float complex z)
-{
-    float_complex_parts value;
-    value.value = z;
-    return value.part[0];
-}
-
-long double (creall)(long double complex z)
-{
-    long_double_complex_parts value;
-    value.value = z;
-    return value.part[0];
-}
-
-double (cimag)(double complex z)
-{
-    double_complex_parts value;
-    value.value = z;
-    return value.part[1];
-}
-
-float (cimagf)(float complex z)
-{
-    float_complex_parts value;
-    value.value = z;
-    return value.part[1];
-}
-
-long double (cimagl)(long double complex z)
-{
-    long_double_complex_parts value;
-    value.value = z;
-    return value.part[1];
-}
-
-double cabs(double complex z)
-{
-    return hypot(creal(z), cimag(z));
-}
-
-float cabsf(float complex z)
-{
-    return hypotf(crealf(z), cimagf(z));
-}
-
-long double cabsl(long double complex z)
-{
-    return hypotl(creall(z), cimagl(z));
-}
-
-double carg(double complex z)
-{
-    return atan2(cimag(z), creal(z));
-}
-
-float cargf(float complex z)
-{
-    return atan2f(cimagf(z), crealf(z));
-}
-
-long double cargl(long double complex z)
-{
-    return atan2l(cimagl(z), creall(z));
-}
-
-double complex conj(double complex z)
-{
-    return DCMPLX(creal(z), -cimag(z));
-}
-
-float complex conjf(float complex z)
-{
-    return FCMPLX(crealf(z), -cimagf(z));
-}
-
-long double complex conjl(long double complex z)
-{
-    return LCMPLX(creall(z), -cimagl(z));
-}
-
-double complex cproj(double complex z)
-{
-    double x = creal(z);
-    double y = cimag(z);
-    if (isinf(x) || isinf(y))
-        return DCMPLX(INFINITY, copysign(0.0, y));
-    return z;
-}
-
-float complex cprojf(float complex z)
-{
-    float x = crealf(z);
-    float y = cimagf(z);
-    if (isinf(x) || isinf(y))
-        return FCMPLX(INFINITY, copysignf(0.0f, y));
-    return z;
-}
-
-long double complex cprojl(long double complex z)
-{
-    long double x = creall(z);
-    long double y = cimagl(z);
-    if (isinf(x) || isinf(y))
-        return LCMPLX(INFINITY, copysignl(0.0L, y));
-    return z;
-}
+DEFINE_BASIC_FUNCTIONS(double, , DCMPLX)
+DEFINE_BASIC_FUNCTIONS(float, f, FCMPLX)
+DEFINE_BASIC_FUNCTIONS(long double, l, LCMPLX)
 
 double complex cexp(double complex z)
 {

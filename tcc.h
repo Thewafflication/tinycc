@@ -1195,8 +1195,7 @@ struct filespec {
 #define TOK_CDOUBLE_I 0xd1 /* imaginary double constant */
 #define TOK_CLDOUBLE_I 0xd2 /* imaginary long double constant */
 
-#define TOK_HAS_VALUE(t) ((t >= TOK_CCHAR && t <= TOK_LINENUM) \
-                         || (t >= TOK_CFLOAT_I && t <= TOK_CLDOUBLE_I))
+#define TOK_HAS_VALUE(t) ((t) >= TOK_CCHAR && (t) <= TOK_CLDOUBLE_I)
 
 #define TOK_EOF       (-1)  /* end of file */
 #define TOK_LINEFEED  10    /* line feed */

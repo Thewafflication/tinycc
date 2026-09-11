@@ -292,13 +292,8 @@ static CType *complex_type_for_real(int real_type)
         return &complex_types[0];
     if (bt == VT_DOUBLE)
         return &complex_types[1];
-#ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
-    if (bt == (VT_DOUBLE | VT_LONG))
+    if (is_long_double_type(bt))
         return &complex_types[2];
-#else
-    if (bt == VT_LDOUBLE)
-        return &complex_types[2];
-#endif
     return NULL;
 }
 
@@ -406,13 +401,8 @@ static int complex_real_rank(CType *type)
     if (is_complex(type->t))
         type = complex_real_type(type);
     real_type = type->t & (VT_BTYPE | VT_LONG);
-#ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
-    if (real_type == (VT_DOUBLE | VT_LONG))
+    if (is_long_double_type(real_type))
         return 3;
-#else
-    if (real_type == VT_LDOUBLE)
-        return 3;
-#endif
     if (real_type == VT_DOUBLE)
         return 2;
     if (real_type == VT_FLOAT)
@@ -604,11 +594,7 @@ ST_FUNC void tccgen_init(TCCState *s1)
 
     init_complex_type(&complex_types[0], VT_FLOAT);
     init_complex_type(&complex_types[1], VT_DOUBLE);
-#ifdef TCC_USING_DOUBLE_FOR_LDOUBLE
-    init_complex_type(&complex_types[2], VT_DOUBLE | VT_LONG);
-#else
-    init_complex_type(&complex_types[2], VT_LDOUBLE);
-#endif
+    init_complex_type(&complex_types[2], long_double_type());
     init_complex_helper_type(&complex_helper_types[0],
                              complex_real_type(&complex_types[1]));
     init_complex_helper_type(&complex_helper_types[1],
@@ -1331,13 +1317,8 @@ static int gvtst(int inv, int t)
 /* generate a zero or nozero test */
 static void gen_test_zero(int op)
 {
-    if (is_complex(vtop->type.t)) {
-        CType bool_type;
-
-        bool_type.t = VT_BOOL;
-        bool_type.ref = NULL;
-        gen_cast(&bool_type);
-    }
+    if (is_complex(vtop->type.t))
+        gen_cast_s(VT_BOOL);
     if (vtop->r == VT_CMP) {
         int j;
         if (op == TOK_EQ) {
@@ -3294,34 +3275,22 @@ static int combine_types(CType *dest, SValue *op1, SValue *op2, int op)
 
 static void prepare_complex_operands(CType *type)
 {
-    int align, size, address;
+    int i, align, size;
 
-    if (is_complex(vtop->type.t) && !is_pure_constant(vtop)
-        && !(vtop->r & VT_COMPLEX_RVALUE)) {
-        CType source_type = vtop->type;
+    for (i = 0; i < 2; ++i) {
+        if (is_complex(vtop->type.t) && !is_pure_constant(vtop)
+            && !(vtop->r & VT_COMPLEX_RVALUE)) {
+            CType source_type = vtop->type;
 
-        size = type_size(&source_type, &align);
-        loc = (loc - size) & -align;
-        address = loc;
-        vset(&source_type, VT_LOCAL | VT_LVAL, address);
+            size = type_size(&source_type, &align);
+            loc = (loc - size) & -align;
+            vset(&source_type, VT_LOCAL | VT_LVAL, loc);
+            vswap();
+            vstore();
+            vtop->r |= VT_COMPLEX_RVALUE;
+        }
         vswap();
-        vstore();
-        vtop->r |= VT_COMPLEX_RVALUE;
     }
-    vswap();
-    if (is_complex(vtop->type.t) && !is_pure_constant(vtop)
-        && !(vtop->r & VT_COMPLEX_RVALUE)) {
-        CType source_type = vtop->type;
-
-        size = type_size(&source_type, &align);
-        loc = (loc - size) & -align;
-        address = loc;
-        vset(&source_type, VT_LOCAL | VT_LVAL, address);
-        vswap();
-        vstore();
-        vtop->r |= VT_COMPLEX_RVALUE;
-    }
-    vswap();
 
     vswap();
     gen_cast(type);
@@ -8465,35 +8434,6 @@ static void write_ldouble(unsigned char *d, void *s)
     }
 }
 
-static void write_complex_part(unsigned char *destination, CType *type,
-                               long double value)
-{
-    union {
-        float f;
-        uint32_t u;
-    } float_value;
-    union {
-        double d;
-        uint64_t u;
-    } double_value;
-
-    switch (type->t & VT_BTYPE) {
-    case VT_FLOAT:
-        float_value.f = value;
-        write32le(destination, float_value.u);
-        break;
-    case VT_DOUBLE:
-        double_value.d = value;
-        write64le(destination, double_value.u);
-        break;
-    case VT_LDOUBLE:
-        write_ldouble(destination, &value);
-        break;
-    default:
-        tcc_internal_error("invalid complex component type");
-    }
-}
-
 /* store a value or an expression directly in global data or in local array */
 static void init_putv(init_params *p, CType *type, unsigned long c)
 {
@@ -8538,10 +8478,10 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
             CType *real_type = complex_real_type(type);
             int part_size = type_size(real_type, &align);
 
-            write_complex_part(ptr, real_type, vtop->c.complex.real);
-            write_complex_part((unsigned char *)ptr + part_size, real_type,
-                               vtop->c.complex.imaginary);
-            vtop--;
+            complex_components();
+            vswap();
+            init_putv(p, real_type, c);
+            init_putv(p, real_type, c + part_size);
             return;
         }
 
