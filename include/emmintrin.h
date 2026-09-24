@@ -111,6 +111,21 @@ static __inline__ __m128i _mm_subs_epi8(__m128i a, __m128i b) { __m128i r; __bui
 static __inline__ __m128i _mm_subs_epi16(__m128i a, __m128i b) { __m128i r; __builtin_tcc_simd(__TCC_S__mm_subs_epi16, &r, &a, &b, 0); return r; }
 static __inline__ __m128i _mm_subs_epu8(__m128i a, __m128i b) { __m128i r; __builtin_tcc_simd(__TCC_S__mm_subs_epu8, &r, &a, &b, 0); return r; }
 static __inline__ __m128i _mm_subs_epu16(__m128i a, __m128i b) { __m128i r; __builtin_tcc_simd(__TCC_S__mm_subs_epu16, &r, &a, &b, 0); return r; }
+/* Expand the hash-slide hot path at the call site: TinyCC does not inline
+   the function wrappers above. Keep those functions for address-taking and
+   parenthesized calls. Typed locals preserve argument checks and evaluate
+   each argument once, including nested intrinsic expressions. */
+#define _mm_load_si128(p) __extension__ ({ \
+    const __m128i *__tcc_load_p = (p); __m128i __tcc_load_r; \
+    __builtin_tcc_simd(__TCC_S__mm_load_si128, &__tcc_load_r, __tcc_load_p, 0, 0); \
+    __tcc_load_r; })
+#define _mm_subs_epu16(a,b) __extension__ ({ \
+    __m128i __tcc_sub_a = (a), __tcc_sub_b = (b), __tcc_sub_r; \
+    __builtin_tcc_simd(__TCC_S__mm_subs_epu16, &__tcc_sub_r, &__tcc_sub_a, &__tcc_sub_b, 0); \
+    __tcc_sub_r; })
+#define _mm_store_si128(p,a) __extension__ ({ \
+    __m128i *__tcc_store_p = (p); __m128i __tcc_store_a = (a); \
+    __builtin_tcc_simd(__TCC_S__mm_store_si128, __tcc_store_p, &__tcc_store_a, 0, 0); })
 static __inline__ __m128i _mm_and_si128(__m128i a, __m128i b) { __m128i r; __builtin_tcc_simd(__TCC_S__mm_and_si128, &r, &a, &b, 0); return r; }
 static __inline__ __m128i _mm_andnot_si128(__m128i a, __m128i b) { __m128i r; __builtin_tcc_simd(__TCC_S__mm_andnot_si128, &r, &a, &b, 0); return r; }
 static __inline__ __m128i _mm_or_si128(__m128i a, __m128i b) { __m128i r; __builtin_tcc_simd(__TCC_S__mm_or_si128, &r, &a, &b, 0); return r; }

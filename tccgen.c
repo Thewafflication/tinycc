@@ -4229,6 +4229,25 @@ ST_FUNC void vstore(void)
         vtop->r |= VT_LVAL;
     }
 
+#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
+    if ((ft & VT_SIMD)
+#ifdef CONFIG_TCC_BCHECK
+        && !tcc_state->do_bounds_check
+#endif
+        ) {
+        /* Vector values are addressable, but copying one need not call
+           memmove or use a general-purpose structure copy sequence.
+           Read the whole source before writing, including self-assignment.
+           Spill live scalar registers before using the scratch XMM0. */
+        if (!nocode_wanted) {
+            save_regs(0);
+            simd_transfer(0, vtop, 0);
+            simd_transfer(0, vtop - 1, 1);
+        }
+        vtop--;
+        return;
+    }
+#endif
     if (sbt == VT_STRUCT) {
         /* if structure, only generate pointer */
         /* structure assignment : generate memcpy */
