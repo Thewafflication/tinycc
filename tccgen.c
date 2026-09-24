@@ -76,6 +76,7 @@ static int func_old;
 ST_DATA const char *funcname;
 ST_DATA CType int_type, func_old_type, char_type, char_pointer_type;
 static CType complex_types[3];
+static CType simd_types[4];
 static CType complex_helper_types[2];
 static CString initstr;
 
@@ -123,6 +124,7 @@ static struct scope {
 typedef struct {
     Section *sec;
     int local_offset;
+    int indirect_local;
     Sym *flex_array_ref;
 } init_params;
 
@@ -255,6 +257,29 @@ static void init_complex_type(CType *type, int real_type)
     field->next = imaginary;
 
     type->t = VT_STRUCT | VT_COMPLEX;
+    type->ref = tag;
+}
+
+static void init_simd_type(CType *type, int element, int width)
+{
+    CType field_type, tag_type;
+    Sym *tag, **next;
+    int size, align, i;
+    char name[16];
+    tag_type.t = VT_STRUCT;
+    tag_type.ref = NULL;
+    field_type.t = element;
+    field_type.ref = NULL;
+    size = type_size(&field_type, &align);
+    tag = sym_push(SYM_FIRST_ANOM | SYM_STRUCT, &tag_type, 0, width);
+    tag->r = width;
+    next = &tag->next;
+    for (i = 0; i < width / size; ++i) {
+        snprintf(name, sizeof name, "__lane%d", i);
+        *next = sym_push(tok_alloc_const(name) | SYM_FIELD, &field_type, 0, i * size);
+        next = &(*next)->next;
+    }
+    type->t = VT_STRUCT | (width == 8 ? VT_MMX : VT_SIMD);
     type->ref = tag;
 }
 
@@ -591,6 +616,11 @@ ST_FUNC void tccgen_init(TCCState *s1)
 
     /* define some often used types */
     int_type.t = VT_INT;
+
+    init_simd_type(&simd_types[0], VT_FLOAT, 16);
+    init_simd_type(&simd_types[1], VT_DOUBLE, 16);
+    init_simd_type(&simd_types[2], VT_LLONG, 16);
+    init_simd_type(&simd_types[3], VT_LLONG, 8);
 
     init_complex_type(&complex_types[0], VT_FLOAT);
     init_complex_type(&complex_types[1], VT_DOUBLE);
@@ -3662,6 +3692,11 @@ static void gen_cast(CType *type)
     int sbt, dbt, sf, df, c;
     int dbt_bt, sbt_bt, ds, ss, bits, trunc;
 
+    if ((type->t & VT_SIMD) && (vtop->type.t & VT_SIMD)) {
+        vtop->type = *type;
+        return;
+    }
+
     /* special delayed cast for char/short */
     if (vtop->r & VT_MUSTCAST)
         force_charshort_cast();
@@ -4687,12 +4722,31 @@ static void check_fields (CType *type, int check)
     }
 }
 
+#ifdef TCC_TARGET_PE
+/* MSVC's intrinsic vector types retain their declared alignment under pack. */
+static int vector_member_alignment(CType *type)
+{
+    Sym *f;
+    int align = 0, a;
+    if (type->t & VT_SIMD) return 16;
+    if (type->t & VT_MMX) return 8;
+    if (type->t & VT_ARRAY) return vector_member_alignment(&type->ref->type);
+    if ((type->t & VT_BTYPE) == VT_STRUCT)
+        for (f = type->ref->next; f; f = f->next) {
+            a = vector_member_alignment(&f->type);
+            if (a > align) align = a;
+        }
+    return align;
+}
+#endif
+
 static void struct_layout(CType *type, AttributeDef *ad)
 {
     int size, align, maxalign, offset, c, bit_pos, bit_size;
     int packed, a, bt, prevbt, prev_bit_size;
     int pcc = !tcc_state->ms_bitfields;
     int pragma_pack = *tcc_state->pack_stack_ptr;
+    int vector_align = 0;
     Sym *f;
 
     maxalign = 1;
@@ -4731,6 +4785,13 @@ static void struct_layout(CType *type, AttributeDef *ad)
                     a = 0;
             }
         }
+#ifdef TCC_TARGET_PE
+        {
+            int va = vector_member_alignment(&f->type);
+            if (a < va) a = va;
+            if (vector_align < va) vector_align = va;
+        }
+#endif
         /* some individual align was specified */
         if (a)
             align = a;
@@ -4855,6 +4916,7 @@ static void struct_layout(CType *type, AttributeDef *ad)
         if (a < bt)
             a = bt;
     }
+    if (a < vector_align) a = vector_align;
     c = (c + a - 1) & -a;
     type->ref->c = c;
 
@@ -5316,6 +5378,18 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
         case TOK_FLOAT:
             u = VT_FLOAT;
             goto basic_type;
+        case TOK_builtin_m128:
+        case TOK_builtin_m128d:
+        case TOK_builtin_m128i:
+        case TOK_builtin_m64:
+#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
+            type1 = simd_types[tok - TOK_builtin_m128];
+            next();
+            goto basic_type2;
+#else
+            tcc_error("SSE vector types require an x86 target");
+            break;
+#endif
         case TOK_DOUBLE:
             if ((t & (VT_BTYPE|VT_LONG)) == VT_LONG) {
                 t = (t & ~(VT_BTYPE|VT_LONG)) | VT_LDOUBLE;
@@ -6115,6 +6189,10 @@ static void parse_atomic(int atok)
     }
 }
 
+#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
+#include "x86-simd.c"
+#endif
+
 ST_FUNC void unary(void)
 {
     int n, t, align, size, r;
@@ -6362,6 +6440,13 @@ ST_FUNC void unary(void)
 	n = is_compatible_types(&vtop[-1].type, &vtop[0].type);
 	vtop -= 2;
 	vpushi(n);
+        break;
+    case TOK_builtin_simd:
+#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
+        simd_builtin();
+#else
+        tcc_error("SSE builtins require an x86 target");
+#endif
         break;
     case TOK_builtin_complex:
         {
@@ -6703,8 +6788,16 @@ special_math_val:
         r = s->r;
         /* A symbol that has a register is a local register variable,
            which starts out as VT_LOCAL value.  */
-        if ((r & VT_VALMASK) < VT_CONST)
-            r = (r & ~VT_VALMASK) | VT_LOCAL;
+        if ((r & VT_VALMASK) < VT_CONST) {
+#ifdef TCC_TARGET_I386
+            int align;
+            type_size(&s->type, &align);
+            if ((r & VT_VALMASK) >= 16 && align >= 8)
+                r = (r & ~VT_VALMASK) | VT_LLOCAL;
+            else
+#endif
+                r = (r & ~VT_VALMASK) | VT_LOCAL;
+        }
 
         vset(&s->type, r, s->c);
         /* Point to s as backpointer (even without r&VT_SYM).
@@ -6810,8 +6903,17 @@ special_math_val:
                     while (size & (size - 1))
                         size = (size | (size - 1)) + 1;
 #endif
-                    loc = (loc - size) & -align;
                     ret.type = s->type;
+#ifdef TCC_TARGET_I386
+                    if (align >= 8) {
+                        simd_temp(&s->type, &ret);
+                        vpushv(&ret);
+                        gaddrof();
+                        vtop->type = int_type;
+                    } else
+#endif
+                    {
+                    loc = (loc - size) & -align;
                     ret.r = VT_LOCAL | VT_LVAL;
                     /* pass it as 'int' to avoid structure arg passing
                        problems */
@@ -6821,10 +6923,11 @@ special_math_val:
                         --loc;
 #endif
                     ret.c = vtop->c;
-                    if (ret_nregs < 0)
-                      vtop--;
-                    else
-                      nb_args++;
+                    }
+                    if (ret_nregs < 0) {
+                        vtop--;
+                    } else
+                        nb_args++;
                 }
             } else {
                 ret_nregs = 1;
@@ -6880,9 +6983,16 @@ special_math_val:
 
             if (ret_nregs < 0) {
                 vsetc(&ret.type, ret.r, &ret.c);
+#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
+                if (ret_nregs == -2)
+                    simd_transfer(0, vtop, 1);
+                else
+#endif
 #if defined(TCC_TARGET_RISCV64) || \
     (defined(TCC_TARGET_X86_64) && !defined(TCC_TARGET_PE))
                 arch_transfer_ret_regs(1);
+#else
+                ;
 #endif
             } else {
                 /* return value */
@@ -7380,6 +7490,13 @@ static void gfunc_return(CType *func_type)
         ret_nregs = gfunc_sret(func_type, func_var, &ret_type,
                                &ret_align, &regsize);
         if (ret_nregs < 0) {
+#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
+            if (ret_nregs == -2) {
+                save_regs(0);
+                simd_transfer(0, vtop, 0);
+            } else
+#endif
+            {
 #if defined(TCC_TARGET_RISCV64) || \
     (defined(TCC_TARGET_X86_64) && !defined(TCC_TARGET_PE))
             if (is_complex(func_type->t) && !(vtop->r & VT_LVAL)) {
@@ -7397,6 +7514,7 @@ static void gfunc_return(CType *func_type)
             }
             arch_transfer_ret_regs(0);
 #endif
+            }
         } else if (0 == ret_nregs) {
             /* if returning structure, must copy it to implicit
                first pointer arg location */
@@ -8192,7 +8310,12 @@ static void init_putz(init_params *p, unsigned long c, int size)
         /* nothing to do because globals are already set to zero */
     } else {
         vpush_helper_func(TOK_memset);
-        vseti(VT_LOCAL, c);
+        if (p->indirect_local) {
+            vseti(VT_LOCAL | VT_LVAL, p->indirect_local);
+            vpushi(c - p->indirect_local);
+            gen_op('+');
+        } else
+            vseti(VT_LOCAL, c);
         vpushi(0);
         vpushs(size);
 #if defined TCC_TARGET_ARM && defined TCC_ARM_EABI
@@ -8590,7 +8713,14 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
 	}
         vtop--;
     } else {
-        vset(&dtype, VT_LOCAL|VT_LVAL, c);
+        if (p->indirect_local) {
+            vseti(VT_LOCAL | VT_LVAL, p->indirect_local);
+            vpushi(c - p->indirect_local);
+            gen_op('+');
+            vtop->type = dtype;
+            vtop->r |= VT_LVAL;
+        } else
+            vset(&dtype, VT_LOCAL|VT_LVAL, c);
         vswap();
         vstore();
         vpop();
@@ -8950,8 +9080,17 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
             loc -= align;
         }
 #endif
-        loc = (loc - size) & -align;
-        addr = loc;
+#ifdef TCC_TARGET_I386
+        if (align >= 8) {
+            addr = simd_aligned_local(size, align);
+            p.indirect_local = addr;
+            r = (r & ~VT_VALMASK) | VT_LLOCAL;
+        } else
+#endif
+        {
+            loc = (loc - size) & -align;
+            addr = loc;
+        }
         p.local_offset = addr + size;
 #ifdef CONFIG_TCC_BCHECK
         if (bcheck && v) {

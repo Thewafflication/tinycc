@@ -167,6 +167,11 @@
 
      DEF(TOK_builtin_types_compatible_p, "__builtin_types_compatible_p")
      DEF(TOK_builtin_complex, "__builtin_complex")
+     DEF(TOK_builtin_m128, "__builtin_tcc_m128")
+     DEF(TOK_builtin_m128d, "__builtin_tcc_m128d")
+     DEF(TOK_builtin_m128i, "__builtin_tcc_m128i")
+     DEF(TOK_builtin_m64, "__builtin_tcc_m64")
+     DEF(TOK_builtin_simd, "__builtin_tcc_simd")
      DEF(TOK_builtin_choose_expr, "__builtin_choose_expr")
      DEF(TOK_builtin_constant_p, "__builtin_constant_p")
      DEF(TOK_builtin_frame_address, "__builtin_frame_address")

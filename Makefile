@@ -200,9 +200,10 @@ DEFINES += -I$(TOP)
 
 CORE_FILES = tcc.c tcctools.c libtcc.c tccpp.c tccgen.c tccdbg.c tccelf.c tccasm.c tccrun.c
 CORE_FILES += tcc.h config.h libtcc.h tcctok.h
-i386_FILES = $(CORE_FILES) i386-gen.c i386-link.c i386-asm.c i386-asm.h i386-tok.h
+SIMD_FILES = x86-simd.c x86-simd-asm.h include/tccsimd.h
+i386_FILES = $(CORE_FILES) $(SIMD_FILES) i386-gen.c i386-link.c i386-asm.c i386-asm.h i386-tok.h
 i386-win32_FILES = $(i386_FILES) tccpe.c
-x86_64_FILES = $(CORE_FILES) x86_64-gen.c x86_64-link.c i386-asm.c x86_64-asm.h
+x86_64_FILES = $(CORE_FILES) $(SIMD_FILES) x86_64-gen.c x86_64-link.c i386-asm.c x86_64-asm.h
 x86_64-win32_FILES = $(x86_64_FILES) tccpe.c
 x86_64-osx_FILES = $(x86_64_FILES) tccmacho.c
 arm_FILES = $(CORE_FILES) arm-gen.c arm-link.c arm-asm.c arm-tok.h
@@ -221,7 +222,7 @@ riscv64_FILES = $(CORE_FILES) riscv64-gen.c riscv64-link.c riscv64-asm.c
 TCCDEFS_H$(subst yes,,$(CONFIG_predefs)) = tccdefs_.h
 
 # libtcc sources
-LIBTCC_SRC = $(filter-out tcc.c tcctools.c,$(filter %.c,$($T_FILES)))
+LIBTCC_SRC = $(filter-out tcc.c tcctools.c x86-simd.c,$(filter %.c,$($T_FILES)))
 
 ifeq ($(ONE_SOURCE),yes)
 LIBTCC_OBJ = $(X)libtcc.o
@@ -230,7 +231,7 @@ TCC_FILES = $(X)tcc.o
 $(X)tcc.o $(X)libtcc.o : $(TCCDEFS_H)
 else
 LIBTCC_OBJ = $(patsubst %.c,$(X)%.o,$(LIBTCC_SRC))
-LIBTCC_INC = $(filter %.h %-gen.c %-link.c,$($T_FILES))
+LIBTCC_INC = $(filter %.h %-gen.c %-link.c x86-simd.c,$($T_FILES))
 TCC_FILES = $(X)tcc.o $(LIBTCC_OBJ)
 $(X)tccpp.o : $(TCCDEFS_H)
 $(X)libtcc.o : DEFINES += -DONE_SOURCE=0

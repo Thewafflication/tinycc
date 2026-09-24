@@ -22,7 +22,8 @@
 
 /* number of available registers */
 #define NB_REGS         5
-#define NB_ASM_REGS     8
+#define NB_ASM_REGS     24
+#define NB_ASM_GP_REGS  8
 #define CONFIG_TCC_ASM
 
 /* a register can belong to several classes. The classes must be
@@ -298,6 +299,11 @@ static void gen_modrm(int opc, int op_r2, int r, Sym *sym, int c)
     }
 }
 
+ST_FUNC void gen_simd_mem(int opcode, int reg, int base, int wide)
+{
+    gen_modrm(opcode, reg, base | VT_LVAL, NULL, 0);
+}
+
 /* load 'r' from value 'sv' */
 ST_FUNC void load(int r, SValue *sv)
 {
@@ -383,6 +389,10 @@ ST_FUNC void load(int r, SValue *sv)
         } else if (v == VT_CONST) {
             o(0xb8 + r); /* mov $xx, r */
             gen_addr32(fr, sv->sym, fc);
+        } else if (v == VT_LLOCAL) {
+            /* Decay of a dynamically aligned local array: its address is
+               stored in the frame slot, rather than being the slot itself. */
+            gen_modrm(0x8b, r, VT_LOCAL, sv->sym, fc);
         } else if (v == VT_LOCAL) {
             if (fc) {
                 /* lea xxx(%ebp), r */
@@ -512,6 +522,14 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int 
 {
 #if defined(TCC_TARGET_PE) || TARGETOS_FreeBSD || TARGETOS_OpenBSD
     int size, align, nregs;
+#endif
+    if (vt->t & (VT_SIMD | VT_MMX)) {
+        *ret = *vt;
+        *ret_align = *regsize = (vt->t & VT_MMX) ? 8 : 16;
+        return -2;
+    }
+
+#if defined(TCC_TARGET_PE) || TARGETOS_FreeBSD || TARGETOS_OpenBSD
     *ret_align = 1; // Never have to re-align return values for x86
     *regsize = 4;
     size = type_size(vt, &align);
@@ -534,6 +552,111 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int 
 #endif
 }
 
+/* Vector cdecl arguments use XMM0..2; remaining arguments occupy a
+   16-byte-aligned outgoing stack area.  Load vector registers only after
+   aggregate copies, which may call memmove. */
+static int gfunc_simd_call(int nb_args)
+{
+    int i, nvec = 0, nmm = 0, size, align, offset = 0, r, slot;
+    int *offsets, *regs;
+    SValue *args = vtop - nb_args + 1;
+    Sym *fn = vtop[-nb_args].type.ref;
+    /* alloca changes the caller's stack; it must not restore the old ESP. */
+    if ((vtop[-nb_args].r & VT_SYM) && vtop[-nb_args].sym->v == TOK_alloca)
+        return 0;
+    for (i = 0; i < nb_args; ++i) {
+        nvec += !!(args[i].type.t & (VT_SIMD | VT_MMX));
+        type_size(&args[i].type, &align);
+        nvec += ((args[i].type.t & VT_BTYPE) == VT_STRUCT && align >= 16);
+    }
+    /* SysV callees may use aligned stack locals even without vector parameters. */
+    if (!nvec
+#ifndef TCC_TARGET_PE
+        && fn->f.func_call != FUNC_CDECL
+#endif
+       )
+        return 0;
+#ifdef TCC_TARGET_PE
+    if (fn->f.func_type != FUNC_NEW)
+        tcc_error("Windows i386 SIMD arguments require a non-variadic prototype");
+#endif
+    if (fn->f.func_call != FUNC_CDECL)
+        tcc_error("SIMD arguments currently require the cdecl convention");
+    save_regs(0);
+    offsets = tcc_malloc(nb_args * sizeof(int));
+    regs = tcc_malloc(nb_args * sizeof(int));
+    nvec = 0;
+    for (i = 0; i < nb_args; ++i) {
+        regs[i] = -1;
+        if ((args[i].type.t & VT_SIMD) && fn->f.func_type == FUNC_NEW && nvec < 3) {
+            regs[i] = nvec++;
+            continue;
+        }
+        if ((args[i].type.t & VT_MMX) && fn->f.func_type == FUNC_NEW && nmm < 3) {
+            regs[i] = nmm++;
+            continue;
+        }
+        size = type_size(&args[i].type, &align);
+        /* Array expressions passed to old-style functions still carry VT_ARRAY. */
+        if ((args[i].type.t & VT_BTYPE) == VT_PTR)
+            size = align = 4;
+#ifdef TCC_TARGET_PE
+        if ((args[i].type.t & VT_BTYPE) == VT_STRUCT && (align >= 16 || (args[i].type.t & VT_MMX))) {
+            SValue copy;
+            simd_temp(&args[i].type, &copy);
+            vpushv(&copy);
+            vpushv(&args[i]);
+            vstore();
+            vpop();
+            args[i] = copy;
+            regs[i] = -2; /* Windows passes aligned aggregates by reference. */
+            size = 4;
+        }
+#else
+        if (align >= 16)
+            offset = (offset + 15) & -16;
+#endif
+        offsets[i] = offset;
+        offset += (size + 3) & -4;
+    }
+    slot = loc = (loc - 4) & -4;
+    gen_modrm(0x89, 4, VT_LOCAL, NULL, slot); /* save esp */
+    oad(0xec81, offset + 15);
+    o(0xf0e483); /* and $-16, esp */
+    for (i = 0; i < nb_args; ++i) {
+        if (regs[i] >= 0)
+            continue;
+        r = get_reg(RC_INT);
+        o(0xe089 | (r << 8)); /* mov esp,r */
+        if (offsets[i]) oad(0xc081 | (r << 8), offsets[i]);
+        vset(&args[i].type, r | VT_LVAL, 0);
+        /* Integer arguments occupy a full word, including variadic promotions. */
+        if ((args[i].type.t & VT_BTYPE) == VT_BYTE
+            || (args[i].type.t & VT_BTYPE) == VT_SHORT
+            || (args[i].type.t & VT_BTYPE) == VT_BOOL)
+            vtop->type.t = VT_INT;
+        if (regs[i] == -2)
+            vtop->type.t = VT_PTR;
+        vpushv(&args[i]);
+        if (regs[i] == -2) {
+            gaddrof();
+            vtop->type.t = VT_PTR;
+        }
+        vstore();
+        vpop();
+    }
+    for (i = 0; i < nb_args; ++i)
+        if (regs[i] >= 0)
+            simd_transfer(regs[i], &args[i], 0);
+    vtop -= nb_args;
+    gcall_or_jmp(0);
+    gen_modrm(0x8b, 4, VT_LOCAL, NULL, slot); /* restore esp */
+    vtop--;
+    tcc_free(offsets);
+    tcc_free(regs);
+    return 1;
+}
+
 /* Generate function call. The function address is pushed first, then
    all the parameters in call order. This functions pops all the
    parameters and the function address. */
@@ -547,6 +670,8 @@ ST_FUNC void gfunc_call(int nb_args)
         gbound_args(nb_args);
 #endif
 
+    if (gfunc_simd_call(nb_args))
+        return;
     save_regs(nb_args + 1);
 
     args_size = 0;
@@ -634,7 +759,8 @@ ST_FUNC void gfunc_call(int nb_args)
         }
     }
 #if !defined(TCC_TARGET_PE) && !TARGETOS_FreeBSD || TARGETOS_OpenBSD
-    else if ((vtop->type.ref->type.t & VT_BTYPE) == VT_STRUCT)
+    else if ((vtop->type.ref->type.t & VT_BTYPE) == VT_STRUCT
+             && !(vtop->type.ref->type.t & (VT_SIMD | VT_MMX)))
         args_size -= 4;
 #endif
 
@@ -656,7 +782,7 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
 {
     CType *func_type = &func_sym->type;
     int addr, align, size, func_call, fastcall_nb_regs;
-    int param_index, param_addr;
+    int param_index, param_addr, simd_index = 0, mmx_index = 0;
     const uint8_t *fastcall_regs_ptr;
     Sym *sym;
     CType *type;
@@ -689,9 +815,10 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
 #if defined(TCC_TARGET_PE) || TARGETOS_FreeBSD || TARGETOS_OpenBSD
     size = type_size(&func_vt,&align);
     if (((func_vt.t & VT_BTYPE) == VT_STRUCT)
+        && !(func_vt.t & (VT_SIMD | VT_MMX))
         && (size > 8 || (size & (size - 1)))) {
 #else
-    if ((func_vt.t & VT_BTYPE) == VT_STRUCT) {
+    if ((func_vt.t & VT_BTYPE) == VT_STRUCT && !(func_vt.t & (VT_SIMD | VT_MMX))) {
 #endif
         /* XXX: fastcall case ? */
         func_vc = addr;
@@ -703,6 +830,41 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
         type = &sym->type;
         size = type_size(type, &align);
         size = (size + 3) & ~3;
+        if (type->t & (VT_SIMD | VT_MMX)) {
+            SValue home;
+            int *index = (type->t & VT_MMX) ? &mmx_index : &simd_index;
+            if (func_call != FUNC_CDECL)
+                tcc_error("SIMD arguments currently require the cdecl convention");
+            if (!func_var && *index < 3) {
+                simd_temp(type, &home);
+                simd_transfer((*index)++, &home, 1);
+                gfunc_set_param(sym, home.c.i, 1);
+            } else {
+#ifdef TCC_TARGET_PE
+                gfunc_set_param(sym, addr, 1);
+                addr += 4;
+#else
+                if (type->t & VT_SIMD)
+                    addr = ((addr - 8 + 15) & -16) + 8;
+                gfunc_set_param(sym, addr, 0);
+                addr += size;
+#endif
+            }
+            continue;
+        }
+#ifdef TCC_TARGET_PE
+        if ((type->t & VT_BTYPE) == VT_STRUCT && align >= 16) {
+            if (func_call != FUNC_CDECL || func_var)
+                tcc_error("aligned aggregate arguments require non-variadic cdecl");
+            gfunc_set_param(sym, addr, 1);
+            addr += 4;
+            continue;
+        }
+#endif
+#ifndef TCC_TARGET_PE
+        if (align >= 16)
+            addr = ((addr - 8 + 15) & -16) + 8;
+#endif
 #ifdef FUNC_STRUCT_PARAM_AS_PTR
         /* structs are passed as pointer */
         if ((type->t & VT_BTYPE) == VT_STRUCT) {

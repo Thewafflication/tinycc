@@ -199,10 +199,14 @@
     } __builtin_va_list[1];
 
     void *__va_arg(__builtin_va_list ap, int arg_type, int size, int align);
+    void *__va_arg_mixed(__builtin_va_list ap, int kind, int align, void *dest);
     #define __builtin_va_start(ap, last) \
        (*(ap) = *(__builtin_va_list)((char*)__builtin_frame_address(0) - 24))
     #define __builtin_va_arg(ap, t)   \
-       (*(t *)(__va_arg(ap, __builtin_va_arg_types(t), sizeof(t), __alignof__(t))))
+       (*(t *)(__builtin_va_arg_types(t) >= 4 \
+           ? __va_arg_mixed(ap, __builtin_va_arg_types(t), __alignof__(t), \
+               &(union { t value; char init; }){.init=0}) \
+           : __va_arg(ap, __builtin_va_arg_types(t), sizeof(t), __alignof__(t))))
     #define __builtin_va_copy(dest, src) (*(dest) = *(src))
 
 #else /* _WIN64 */
@@ -242,10 +246,19 @@
                                   & -(__alignof__(type)))
     #define __builtin_va_arg(ap,type) (*(sizeof(type) > (2*__va_reg_size) ? *(type **)((ap += __va_reg_size) - __va_reg_size) : (ap = (va_list)(_tcc_align(ap,type) + (sizeof(type)+__va_reg_size - 1)& -__va_reg_size), (type *)(ap - ((sizeof(type)+ __va_reg_size - 1)& -__va_reg_size)))))
 
-#else /* __i386__ */
-    typedef char *__builtin_va_list;
-    #define __builtin_va_start(ap,last) (ap = ((char *)&(last)) + ((sizeof(last)+3)&~3))
-    #define __builtin_va_arg(ap,t) (*(t*)((ap+=(sizeof(t)+3)&~3)-((sizeof(t)+3)&~3)))
+  #else /* __i386__ */
+      typedef char *__builtin_va_list;
+      #define __builtin_va_start(ap,last) (ap = ((char *)&(last)) + ((sizeof(last)+3)&~3))
+  #if defined(__i386__) && !defined(_WIN32)
+      #define __tcc_va_vector(t) (__builtin_types_compatible_p(t,__builtin_tcc_m128) \
+          || __builtin_types_compatible_p(t,__builtin_tcc_m128d) \
+          || __builtin_types_compatible_p(t,__builtin_tcc_m128i))
+      #define __builtin_va_arg(ap,t) (*(t*)((ap=(char *)(((unsigned)(ap) \
+          + (__tcc_va_vector(t)?15:3)) & ~(__tcc_va_vector(t)?15:3)) \
+          + ((sizeof(t)+3)&~3))-((sizeof(t)+3)&~3)))
+  #else
+      #define __builtin_va_arg(ap,t) (*(t*)((ap+=(sizeof(t)+3)&~3)-((sizeof(t)+3)&~3)))
+  #endif
 
 #endif
     #define __builtin_va_end(ap) (void)(ap)

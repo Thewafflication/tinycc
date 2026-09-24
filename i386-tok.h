@@ -330,3 +330,6 @@
 #else
 # include "i386-asm.h"
 #endif
+
+/* Sentinel after all assembler instruction tokens. */
+ DEF_ASM(simd_last)

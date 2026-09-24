@@ -1078,7 +1078,8 @@ struct filespec {
 #define VT_INLINE  0x00008000  /* inline definition */
 #define VT_TLS     0x00010000  /* thread-local storage */
 #define VT_COMPLEX 0x00020000  /* complex scalar represented by a struct */
-/* currently unused: 0x000[48]0000  */
+#define VT_SIMD    0x00040000  /* 128-bit x86 vector, memory-backed internally */
+#define VT_MMX     0x00080000  /* 64-bit x86 MMX vector */
 
 #define VT_STRUCT_SHIFT 20     /* shift for bitfield shift values (32 - 2*6) */
 #define VT_STRUCT_MASK (((1U << (6+6)) - 1) << VT_STRUCT_SHIFT | VT_BITFIELD)
@@ -1641,6 +1642,12 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *align, int *reg
 ST_FUNC void gfunc_call(int nb_args);
 ST_FUNC void gfunc_prolog(Sym *func_sym);
 ST_FUNC void gfunc_epilog(void);
+#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
+ST_FUNC void gen_simd_mem(int opcode, int reg, int base, int wide);
+ST_FUNC void simd_transfer(int xmm, SValue *value, int store_value);
+ST_FUNC void simd_temp(CType *type, SValue *value);
+ST_FUNC int simd_aligned_local(int size, int align);
+#endif
 ST_FUNC void gen_fill_nops(int);
 ST_FUNC int gjmp(int t);
 ST_FUNC void gjmp_addr(int a);
